@@ -2,6 +2,7 @@ import os
 import smtplib
 import ssl
 import requests
+import json
 from email.mime.text import MIMEText
 from email.mime.multipart import MIMEMultipart
 
@@ -10,6 +11,19 @@ EMAIL_USER = os.getenv("EMAIL_USER")
 EMAIL_PASS = os.getenv("EMAIL_PASS")
 EMAIL_TO = os.getenv("EMAIL_TO")
 
+STATE_FILE = "slot_state.json"  # 用來保存上次狀態
+
+def load_state():
+    try:
+        with open(STATE_FILE, "r") as f:
+            return json.load(f)
+    except FileNotFoundError:
+        return {"slots_available": False}
+
+def save_state(state):
+    with open(STATE_FILE, "w") as f:
+        json.dump(state, f)
+
 def check_appointments():
     slots_available = False
 
@@ -17,9 +31,9 @@ def check_appointments():
         try:
             response = requests.get(url.strip(), timeout=10)
             if response.status_code == 200:
-                page_text = response.content.decode('utf-8')  # 用utf-8解碼
+                page_text = response.content.decode('utf-8')
                 print(f"--- Content preview from {url} ---")
-                print(page_text[:1000])  # 印出前1000字元，方便檢查
+                print(page_text[:1000])
                 print(f"--- End of preview ---\n")
                 if "在這些天中沒有可預約的時段" not in page_text:
                     slots_available = True
@@ -48,10 +62,14 @@ def send_email():
         print(f"❌ Failed to send email: {e}")
 
 if __name__ == "__main__":
-    slots_available = check_appointments()
+    prev_state = load_state()
+    current_slots_available = check_appointments()
 
-    if slots_available:
-        print("📌 Detected available slots, sending notification.")
+    if current_slots_available and not prev_state.get("slots_available", False):
+        print("📌 Detected new available slots, sending notification.")
         send_email()
     else:
-        print("🔄 No available slots detected.")
+        print("🔄 No new available slots detected or already notified.")
+
+    # 更新狀態（不管是否發郵件，都更新狀態）
+    save_state({"slots_available": current_slots_available})
