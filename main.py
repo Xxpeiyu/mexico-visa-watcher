@@ -18,6 +18,9 @@ def check_appointments():
             response = requests.get(url.strip(), timeout=10)
             if response.status_code == 200:
                 page_text = response.content.decode('utf-8')  # 用utf-8解碼
+                print(f"--- Content preview from {url} ---")
+                print(page_text[:1000])  # 印出前1000字元，方便檢查
+                print(f"--- End of preview ---\n")
                 if "在這些天中沒有可預約的時段" not in page_text:
                     slots_available = True
         except Exception as e:
