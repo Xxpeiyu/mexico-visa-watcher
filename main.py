@@ -17,8 +17,7 @@ def check_appointments():
         try:
             response = requests.get(url.strip(), timeout=10)
             if response.status_code == 200:
-                page_text = response.text
-                # 判斷頁面是否沒有「在這些天中沒有可預約的時段」
+                page_text = response.content.decode('utf-8')  # 用utf-8解碼
                 if "在這些天中沒有可預約的時段" not in page_text:
                     slots_available = True
         except Exception as e:
