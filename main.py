@@ -2,7 +2,6 @@ import os
 import smtplib
 import ssl
 import requests
-import hashlib
 from email.mime.text import MIMEText
 from email.mime.multipart import MIMEMultipart
 
@@ -11,21 +10,21 @@ EMAIL_USER = os.getenv("EMAIL_USER")
 EMAIL_PASS = os.getenv("EMAIL_PASS")
 EMAIL_TO = os.getenv("EMAIL_TO")
 
-HASH_STORE_FILE = "last_hash.txt"
-
-def get_hash(text):
-    return hashlib.md5(text.encode('utf-8')).hexdigest()
-
 def check_appointments():
-    combined_content = ""
+    slots_available = False
+
     for url in CHECK_URLS:
         try:
             response = requests.get(url.strip(), timeout=10)
             if response.status_code == 200:
-                combined_content += response.text
+                page_text = response.text
+                # 判斷頁面是否沒有「在這些天中沒有可預約的時段」
+                if "在這些天中沒有可預約的時段" not in page_text:
+                    slots_available = True
         except Exception as e:
             print(f"Error checking {url}: {e}")
-    return combined_content
+
+    return slots_available
 
 def send_email():
     msg = MIMEMultipart()
@@ -47,18 +46,10 @@ def send_email():
         print(f"❌ Failed to send email: {e}")
 
 if __name__ == "__main__":
-    content = check_appointments()
-    current_hash = get_hash(content)
+    slots_available = check_appointments()
 
-    last_hash = ""
-    if os.path.exists(HASH_STORE_FILE):
-        with open(HASH_STORE_FILE, "r") as f:
-            last_hash = f.read().strip()
-
-    if current_hash != last_hash:
-        print("📌 Change detected! Sending notification.")
+    if slots_available:
+        print("📌 Detected available slots, sending notification.")
         send_email()
-        with open(HASH_STORE_FILE, "w") as f:
-            f.write(current_hash)
     else:
-        print("🔄 No changes detected.")
+        print("🔄 No available slots detected.")
