@@ -6,6 +6,7 @@ from email.mime.text import MIMEText
 from email.mime.multipart import MIMEMultipart
 from selenium import webdriver
 from selenium.webdriver.chrome.options import Options
+from selenium.webdriver.chrome.service import Service
 from webdriver_manager.chrome import ChromeDriverManager
 
 # 環境變數
@@ -31,13 +32,15 @@ def save_state(state):
 def check_appointments():
     slots_available = False
 
-    # 設定 Selenium 無頭模式
+    # Selenium 設定（無頭模式）
     options = Options()
     options.add_argument("--headless")
     options.add_argument("--disable-gpu")
     options.add_argument("--no-sandbox")
 
-    driver = webdriver.Chrome(ChromeDriverManager().install(), options=options)
+    # 修正這裡
+    service = Service(ChromeDriverManager().install())
+    driver = webdriver.Chrome(service=service, options=options)
 
     for url in CHECK_URLS:
         try:
@@ -47,7 +50,6 @@ def check_appointments():
             print(page_text[:1000])
             print(f"--- End of preview ---\n")
 
-            # 根據頁面關鍵字判斷是否有空位
             if "在這些天中沒有可預約的時段" not in page_text:
                 slots_available = True
         except Exception as e:
@@ -86,4 +88,3 @@ if __name__ == "__main__":
         print("🔄 No new available slots detected or already notified.")
 
     save_state({"slots_available": current_slots_available})
-
