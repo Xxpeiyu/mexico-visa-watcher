@@ -1,90 +1,66 @@
+import time
 import os
 import smtplib
-import ssl
-import json
 from email.mime.text import MIMEText
-from email.mime.multipart import MIMEMultipart
 from selenium import webdriver
-from selenium.webdriver.chrome.options import Options
 from selenium.webdriver.chrome.service import Service
+from selenium.webdriver.chrome.options import Options
 from webdriver_manager.chrome import ChromeDriverManager
+from bs4 import BeautifulSoup
 
-# 環境變數
-CHECK_URLS = os.getenv("CHECK_URLS", "").split(",")
-EMAIL_USER = os.getenv("EMAIL_USER")
-EMAIL_PASS = os.getenv("EMAIL_PASS")
-EMAIL_TO = os.getenv("EMAIL_TO")
+# 建立 Chrome driver（適用於 Render）
+def create_driver():
+    chrome_options = Options()
+    chrome_options.add_argument("--headless")  # 無頭模式
+    chrome_options.add_argument("--no-sandbox")  # 為避免 Docker 環境問題
+    chrome_options.add_argument("--disable-dev-shm-usage")  # 防止共享記憶體問題
 
-# 狀態紀錄檔
-STATE_FILE = "slot_state.json"
+    # 在 Render 上指定 Chromium 路徑
+    chrome_binary = "/usr/bin/google-chrome"  # Render 支援 google-chrome
+    if os.path.exists(chrome_binary):
+        chrome_options.binary_location = chrome_binary
 
-def load_state():
-    try:
-        with open(STATE_FILE, "r") as f:
-            return json.load(f)
-    except FileNotFoundError:
-        return {"slots_available": False}
-
-def save_state(state):
-    with open(STATE_FILE, "w") as f:
-        json.dump(state, f)
-
-def check_appointments():
-    slots_available = False
-
-    # Selenium 設定（無頭模式）
-    options = Options()
-    options.add_argument("--headless")
-    options.add_argument("--disable-gpu")
-    options.add_argument("--no-sandbox")
-
-    # 修正這裡
     service = Service(ChromeDriverManager().install())
-    driver = webdriver.Chrome(service=service, options=options)
+    driver = webdriver.Chrome(service=service, options=chrome_options)
+    return driver
 
-    for url in CHECK_URLS:
-        try:
-            driver.get(url.strip())
-            page_text = driver.page_source
-            print(f"--- Content preview from {url} ---")
-            print(page_text[:1000])
-            print(f"--- End of preview ---\n")
+# 實際執行網頁爬蟲檢查
+def check_appointments():
+    driver = create_driver()
+    url = "https://example.com/appointment"  # <-- 請替換為實際網址
+    driver.get(url)
 
-            if "在這些天中沒有可預約的時段" not in page_text:
-                slots_available = True
-        except Exception as e:
-            print(f"Error checking {url}: {e}")
+    time.sleep(3)  # 等待網頁載入
+    soup = BeautifulSoup(driver.page_source, 'html.parser')
+
+    # 根據實際網頁內容修改下列搜尋條件
+    if "No appointments" not in soup.text:
+        print("✅ 有空位")
+        result = True
+    else:
+        print("❌ 無空位")
+        result = False
 
     driver.quit()
-    return slots_available
+    return result
 
-def send_email():
-    msg = MIMEMultipart()
-    msg["From"] = EMAIL_USER
-    msg["To"] = EMAIL_TO
-    msg["Subject"] = "📅 New Appointment Slot Detected"
+# 發送 email 通知（選填）
+def send_email_notification():
+    sender = os.environ.get("EMAIL_SENDER")
+    password = os.environ.get("EMAIL_PASSWORD")
+    recipient = os.environ.get("EMAIL_RECIPIENT")
 
-    body = "There may be new slots available at the following URLs:\n\n"
-    body += "\n".join(CHECK_URLS)
+    msg = MIMEText("有簽證預約空位出現了！請馬上預約！")
+    msg["Subject"] = "【簽證預約通知】有空位了！"
+    msg["From"] = sender
+    msg["To"] = recipient
 
-    msg.attach(MIMEText(body, "plain"))
+    with smtplib.SMTP_SSL("smtp.gmail.com", 465) as smtp:
+        smtp.login(sender, password)
+        smtp.send_message(msg)
+        print("📧 已發送通知 Email")
 
-    try:
-        with smtplib.SMTP_SSL("smtp.gmail.com", 465, context=ssl.create_default_context()) as server:
-            server.login(EMAIL_USER, EMAIL_PASS)
-            server.sendmail(EMAIL_USER, EMAIL_TO, msg.as_string())
-            print("✅ Email sent successfully.")
-    except Exception as e:
-        print(f"❌ Failed to send email: {e}")
-
+# 主流程
 if __name__ == "__main__":
-    prev_state = load_state()
-    current_slots_available = check_appointments()
-
-    if current_slots_available and not prev_state.get("slots_available", False):
-        print("📌 Detected new available slots, sending notification.")
-        send_email()
-    else:
-        print("🔄 No new available slots detected or already notified.")
-
-    save_state({"slots_available": current_slots_available})
+    if check_appointments():
+        send_email_notification()
