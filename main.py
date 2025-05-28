@@ -1,17 +1,21 @@
 import os
 import smtplib
 import ssl
-import requests
 import json
 from email.mime.text import MIMEText
 from email.mime.multipart import MIMEMultipart
+from selenium import webdriver
+from selenium.webdriver.chrome.options import Options
+from webdriver_manager.chrome import ChromeDriverManager
 
+# 環境變數
 CHECK_URLS = os.getenv("CHECK_URLS", "").split(",")
 EMAIL_USER = os.getenv("EMAIL_USER")
 EMAIL_PASS = os.getenv("EMAIL_PASS")
 EMAIL_TO = os.getenv("EMAIL_TO")
 
-STATE_FILE = "slot_state.json"  # 用來保存上次狀態
+# 狀態紀錄檔
+STATE_FILE = "slot_state.json"
 
 def load_state():
     try:
@@ -27,19 +31,29 @@ def save_state(state):
 def check_appointments():
     slots_available = False
 
+    # 設定 Selenium 無頭模式
+    options = Options()
+    options.add_argument("--headless")
+    options.add_argument("--disable-gpu")
+    options.add_argument("--no-sandbox")
+
+    driver = webdriver.Chrome(ChromeDriverManager().install(), options=options)
+
     for url in CHECK_URLS:
         try:
-            response = requests.get(url.strip(), timeout=10)
-            if response.status_code == 200:
-                page_text = response.content.decode('utf-8')
-                print(f"--- Content preview from {url} ---")
-                print(page_text[:1000])
-                print(f"--- End of preview ---\n")
-                if "在這些天中沒有可預約的時段" not in page_text:
-                    slots_available = True
+            driver.get(url.strip())
+            page_text = driver.page_source
+            print(f"--- Content preview from {url} ---")
+            print(page_text[:1000])
+            print(f"--- End of preview ---\n")
+
+            # 根據頁面關鍵字判斷是否有空位
+            if "在這些天中沒有可預約的時段" not in page_text:
+                slots_available = True
         except Exception as e:
             print(f"Error checking {url}: {e}")
 
+    driver.quit()
     return slots_available
 
 def send_email():
@@ -71,5 +85,5 @@ if __name__ == "__main__":
     else:
         print("🔄 No new available slots detected or already notified.")
 
-    # 更新狀態（不管是否發郵件，都更新狀態）
     save_state({"slots_available": current_slots_available})
+
