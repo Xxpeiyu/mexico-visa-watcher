@@ -1,4 +1,3 @@
 selenium
-chromedriver-autoinstaller
 beautifulsoup4
-requests
+webdriver-manager
