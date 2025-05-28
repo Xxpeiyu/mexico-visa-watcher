@@ -1,4 +1,4 @@
-requests
-beautifulsoup4
 selenium
-webdriver-manager
+chromedriver-autoinstaller
+beautifulsoup4
+requests
