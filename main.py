@@ -5,7 +5,8 @@ from email.mime.text import MIMEText
 from selenium import webdriver
 from selenium.webdriver.chrome.service import Service
 from selenium.webdriver.chrome.options import Options
-from webdriver_manager.chrome import ChromeDriverManager
+# 移除 webdriver_manager，因為在 Render 上直接指定 Chrome 路徑更穩定
+# from webdriver_manager.chrome import ChromeDriverManager
 from bs4 import BeautifulSoup
 import json # 用於儲存狀態
 
@@ -16,62 +17,67 @@ CALENDAR_URLS = [
 ]
 
 # Email 設定 (從環境變數讀取)
-# 請確保在 Render 上設定這些環境變數
 EMAIL_SENDER = os.environ.get("EMAIL_SENDER")
 EMAIL_PASSWORD = os.environ.get("EMAIL_PASSWORD")
 EMAIL_RECIPIENT = os.environ.get("EMAIL_RECIPIENT")
 
 # 用於儲存上次已知空位資訊的檔案，避免重複通知
-# 在 Render 上，這個檔案會儲存在每次部署的容器中，
-# 如果您使用 Cron Job，每次運行都是一個新的容器，
-# 這意味著 `last_slots.json` 將不會持久化。
-# 對於 Cron Job，您可能需要考慮使用外部儲存 (例如 S3, Google Cloud Storage)
-# 或更進階的狀態管理方式。
-# 但對於 Web Service (即使會休眠)，它會嘗試保持檔案。
+# 在 Render 的 Cron Job 環境中，這個檔案不會持久化。
+# 如果您使用 Cron Job 且需要避免重複通知，請考慮使用外部持久化儲存，
+# 例如 Render 的 Disk (需付費) 或雲端儲存服務 (如 S3, Google Cloud Storage)。
+# 對於 Web Service (即使會休眠)，它會嘗試保持檔案。
 LAST_SLOTS_FILE = "last_slots.json"
 
 # 建立 Chrome driver（適用於 Render 部署環境）
 def create_driver():
     chrome_options = Options()
-    # 無頭模式：瀏覽器在背景運行，沒有圖形介面
     chrome_options.add_argument("--headless")
-    # 禁用沙箱模式：在 Docker 或某些 Linux 環境中可能需要，以避免權限問題
     chrome_options.add_argument("--no-sandbox")
-    # 禁用 /dev/shm 的使用：在某些環境中可以防止共享記憶體問題
     chrome_options.add_argument("--disable-dev-shm-usage")
-    # 設置視窗大小：有助於確保網頁內容完整載入，避免元素隱藏
     chrome_options.add_argument("--window-size=1920,1080")
-    # 禁用 GPU 硬體加速：在無頭模式或某些虛擬環境中可能需要
     chrome_options.add_argument("--disable-gpu")
-    # 禁用擴充功能
     chrome_options.add_argument("--disable-extensions")
-    # 禁用瀏覽器資訊列
     chrome_options.add_argument("--disable-infobars")
-    # 禁用彈出視窗
     chrome_options.add_argument("--disable-popup-blocking")
 
-    # 在 Render 這類雲端環境中，Chromium 通常已經預裝。
-    # 這裡嘗試指定一個常見的 Chromium/Google Chrome 路徑。
-    # 如果部署失敗，可能需要根據 Render 的實際環境調整此路徑。
-    chrome_binary_path = "/usr/bin/google-chrome" # Render 預設可能為此路徑
+    # *** 關鍵修改：直接指定 Render 環境中的 Chromium 路徑 ***
+    # Render 通常會在 /usr/bin/chromium 或 /usr/bin/google-chrome 提供 Chromium
+    # 根據 Render 的文件和常見部署經驗，/usr/bin/chromium 是更可靠的選擇
+    # 如果這個路徑仍然失敗，您可能需要查閱 Render 的最新文件或嘗試其他常見路徑
+    chrome_binary_path = "/usr/bin/chromium"
     if os.path.exists(chrome_binary_path):
         chrome_options.binary_location = chrome_binary_path
+        print(f"找到 Chrome Binary：{chrome_binary_path}")
     else:
-        print(f"警告：在預設路徑 '{chrome_binary_path}' 找不到 Chrome。如果部署失敗，請檢查 Render 環境中的 Chrome 路徑。")
+        # 如果 /usr/bin/chromium 不存在，嘗試 /usr/bin/google-chrome (舊版 Render 或特定環境)
+        chrome_binary_path = "/usr/bin/google-chrome"
+        if os.path.exists(chrome_binary_path):
+            chrome_options.binary_location = chrome_binary_path
+            print(f"找到 Chrome Binary (備用路徑)：{chrome_binary_path}")
+        else:
+            print(f"錯誤：在預設路徑 '{chrome_binary_path}' 和 '/usr/bin/chromium' 都找不到 Chrome。")
+            print("請檢查 Render 環境中的 Chrome 路徑，或考慮使用 Docker 部署。")
+            # 如果找不到 Chrome，直接拋出錯誤，讓服務部署失敗，以便您能及時發現問題
+            raise FileNotFoundError("無法找到 Chrome Binary，請檢查 Render 環境配置。")
 
-    # 使用 ChromeDriverManager 自動下載並管理 ChromeDriver。
-    # 在 Render 這類無伺服器環境中，自動下載可能會遇到權限或網路問題。
-    # 如果部署遇到問題，可以嘗試移除 ChromeDriverManager，並手動指定 ChromeDriver 路徑
-    # (例如：service = Service('/usr/local/bin/chromedriver') 或 Render 提供的路徑)。
-    try:
-        service = Service(ChromeDriverManager().install())
-    except Exception as e:
-        print(f"無法自動安裝 ChromeDriver：{e}")
-        print("嘗試直接使用系統預裝的 ChromeDriver (如果存在)。")
-        # 這是備用方案，如果自動安裝失敗，嘗試使用一個常見的系統路徑
-        service = Service("/usr/local/bin/chromedriver") # 另一個常見路徑
-        # 如果還是不行，可能需要更深入了解 Render 的環境配置
-
+    # 移除 ChromeDriverManager().install()，因為我們直接指定了 Chrome Binary
+    # 並且 Render 環境中通常已經有 ChromeDriver，不需要額外安裝
+    # 這裡我們需要一個 ChromeDriver 的路徑，Render 通常會提供
+    # Render 預設的 ChromeDriver 路徑通常與 Chromium 在同一目錄或類似位置
+    # 嘗試使用一個常見的 Render ChromeDriver 路徑
+    chromedriver_path = "/usr/bin/chromedriver" # Render 環境中常見的 ChromeDriver 路徑
+    if not os.path.exists(chromedriver_path):
+        # 如果上述路徑不對，嘗試其他常見路徑，或者這一步可能需要您手動確認 Render 環境
+        # 或者考慮在 build command 中手動下載 ChromeDriver 到一個已知路徑
+        print(f"警告：在預設路徑 '{chromedriver_path}' 找不到 ChromeDriver。")
+        print("如果服務失敗，請檢查 Render 環境中的 ChromeDriver 路徑。")
+        # 這裡我們仍會嘗試創建服務，但如果 ChromeDriver 不存在，會報錯
+        # 為了讓程式碼能繼續運行，我們暫時不在此處拋出錯誤，讓 Selenium 自己去報錯
+        # 但理想情況下，如果 ChromeDriver 確定不存在，應該在此處停止
+    
+    # 創建 Service 實例，直接指定 ChromeDriver 的路徑
+    service = Service(executable_path=chromedriver_path)
+    
     driver = webdriver.Chrome(service=service, options=chrome_options)
     return driver
 
@@ -112,8 +118,6 @@ def check_appointments():
             # --- 針對 Google Calendar 的特定元素搜尋 ---
             # 這是最關鍵且最容易出錯的部分。
             # Google Calendar 的事件通常會顯示為 `div` 元素，其中包含事件標題、時間等。
-            # 由於無法直接檢查您提供的 `calendar.app.google` 連結的即時 HTML 結構，
-            # 我將使用一個常見的 Google Calendar 事件元素選擇器作為範例。
             # 您需要使用瀏覽器開發者工具 (按 F12) 檢查實際頁面，
             # 找到代表「可預約空位」的 HTML 元素及其獨特的 `class` 或其他屬性。
             #
@@ -198,3 +202,5 @@ if __name__ == "__main__":
     if check_appointments(): # 如果有發現新的空位
         send_email_notification() # 就發送通知
     print("--- 檢查結束 ---")
+
+
